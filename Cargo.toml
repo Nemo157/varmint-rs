@@ -7,3 +7,4 @@ authors = ["Wim Looman <wim@nemo157.com>"]
 arrayvec = "*"
 futures = "*"
 tokio-core = "*"
+tokio-ext = { path = "../tokio-ext" }

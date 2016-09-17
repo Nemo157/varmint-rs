@@ -1,17 +1,17 @@
+use std::io::{ Read, Error, ErrorKind };
 use arrayvec::ArrayVec;
 use futures::{ Future, Poll, Async };
-use std::io as stdio;
 
-pub fn read_u64_varint<R: stdio::Read>(reader: R) -> impl Future<Item=(R, u64), Error=stdio::Error> {
+pub fn read_u64_varint<R: Read>(reader: R) -> impl Future<Item=(R, u64), Error=Error> {
     TryReadU64Varint {
         reader: Some(reader),
         buffer: ArrayVec::new(),
         allow_none: false,
-    }.map(|(r, v)| (r, v.unwrap()))
+    }.map(|r| r.unwrap())
 }
 
 /// Returns None if EOF on the first byte
-pub fn try_read_u64_varint<R: stdio::Read>(reader: R) -> impl Future<Item=(R, Option<u64>), Error=stdio::Error> {
+pub fn try_read_u64_varint<R: Read>(reader: R) -> impl Future<Item=Option<(R, u64)>, Error=Error> {
     TryReadU64Varint {
         reader: Some(reader),
         buffer: ArrayVec::new(),
@@ -20,27 +20,27 @@ pub fn try_read_u64_varint<R: stdio::Read>(reader: R) -> impl Future<Item=(R, Op
 }
 
 #[cfg(target_arch = "x86_64")] // TODO: better cfg detection of this
-pub fn read_usize_varint<R: stdio::Read>(reader: R) -> impl Future<Item=(R, usize), Error=stdio::Error> {
+pub fn read_usize_varint<R: Read>(reader: R) -> impl Future<Item=(R, usize), Error=Error> {
     read_u64_varint(reader).map(|(r, u)| (r, u as usize))
 }
 
 #[cfg(target_arch = "x86_64")] // TODO: better cfg detection of this
 /// Returns None if EOF on the first byte
-pub fn try_read_usize_varint<R: stdio::Read>(reader: R) -> impl Future<Item=(R, Option<usize>), Error=stdio::Error> {
-    try_read_u64_varint(reader).map(|(r, o)| (r, o.map(|u| u as usize)))
+pub fn try_read_usize_varint<R: Read>(reader: R) -> impl Future<Item=Option<(R, usize)>, Error=Error> {
+    try_read_u64_varint(reader).map(|r| r.map(|(r, u)| (r, u as usize)))
 }
 
-struct TryReadU64Varint<R: stdio::Read> {
+struct TryReadU64Varint<R: Read> {
     reader: Option<R>,
     buffer: ArrayVec<[u8; 10]>,
     allow_none: bool,
 }
 
-impl<R: stdio::Read> Future for TryReadU64Varint<R> {
-    type Item = (R, Option<u64>);
-    type Error = stdio::Error;
+impl<R: Read> Future for TryReadU64Varint<R> {
+    type Item = Option<(R, u64)>;
+    type Error = Error;
 
-    fn poll(&mut self) -> Poll<(R, Option<u64>), stdio::Error> {
+    fn poll(&mut self) -> Poll<Option<(R, u64)>, Error> {
         let mut reader = self.reader.take().expect("poll a TryReadU64Varint after it's done");
 
         while self.buffer.len() <= 9 && (self.buffer.is_empty() || *self.buffer.last().unwrap() >= 0x80) {
@@ -50,13 +50,13 @@ impl<R: stdio::Read> Future for TryReadU64Varint<R> {
                     self.buffer.push(b[0]);
                 }
                 Err(err) => return match err.kind() {
-                    stdio::ErrorKind::WouldBlock => {
+                    ErrorKind::WouldBlock => {
                         self.reader = Some(reader);
                         Ok(Async::NotReady)
                     }
-                    stdio::ErrorKind::UnexpectedEof => {
+                    ErrorKind::UnexpectedEof => {
                         if self.allow_none && self.buffer.is_empty() {
-                            Ok(Async::Ready((reader, None)))
+                            Ok(Async::Ready(None))
                         } else {
                             Err(err)
                         }
@@ -67,7 +67,7 @@ impl<R: stdio::Read> Future for TryReadU64Varint<R> {
         }
 
         if self.buffer.len() == 10 && *self.buffer.last().unwrap() > 0x01 {
-            return Err(stdio::Error::new(stdio::ErrorKind::Other, "varint exceeded 64 bits long"));
+            return Err(Error::new(ErrorKind::Other, "varint exceeded 64 bits long"));
         }
 
         let result = self.buffer
@@ -76,7 +76,7 @@ impl<R: stdio::Read> Future for TryReadU64Varint<R> {
             .map(|(i, b)| (((b & 0x7F) as u64) << (7 * i)))
             .sum();
 
-        return Ok(Async::Ready((reader, Some(result))));
+        return Ok(Async::Ready(Some((reader, result))));
     }
 }
 
@@ -88,6 +88,10 @@ mod tests {
 
     fn r<A, B, E: fmt::Debug, F: Future<Item=(A, B), Error=E>>(f: F) -> B {
         f.wait().unwrap().1
+    }
+
+    fn ro<A, B, E: fmt::Debug, F: Future<Item=Option<(A, B)>, Error=E>>(f: F) -> Option<B> {
+        f.wait().unwrap().map(|(_, u)| u)
     }
 
     #[test]
@@ -147,12 +151,12 @@ mod tests {
     #[test]
     fn try_some() {
         let bytes: &[u8] = &[0xAC, 0x02];
-        assert_eq!(r(try_read_u64_varint(bytes)), Some(0x12C));
+        assert_eq!(ro(try_read_u64_varint(bytes)), Some(0x12C));
     }
 
     #[test]
     fn try_none() {
         let bytes: &[u8] = &[];
-        assert_eq!(r(try_read_u64_varint(bytes)), None);
+        assert_eq!(ro(try_read_u64_varint(bytes)), None);
     }
 }

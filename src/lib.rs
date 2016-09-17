@@ -4,6 +4,7 @@ extern crate arrayvec;
 extern crate futures;
 #[macro_use]
 extern crate tokio_core;
+extern crate tokio_ext;
 
 mod read;
 mod write;
