@@ -18,8 +18,12 @@ before_script:
 
 script:
   - cargo test
+  - cargo test --no-default-features
+  - cargo test --all-features
   - case "$TRAVIS_RUST_VERSION" in nightly*)
       cargo clippy -- -D warnings;
+      cargo clippy --no-default-features -- -D warnings;
+      cargo clippy --all-features -- -D warnings;
     esac
 
 before_deploy:

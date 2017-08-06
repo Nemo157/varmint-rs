@@ -1,9 +1,10 @@
 use std::io;
 
+use parser::Parser;
+
 trait ReadHelper {
     fn read_u8(&mut self) -> io::Result<u8>;
     fn try_read_u8(&mut self) -> io::Result<Option<u8>>;
-    fn read_remaining_u64_varint(&mut self, first: u8) -> io::Result<u64>;
 }
 
 /// A trait to allow reading integers from a byte-oriented source that were
@@ -131,48 +132,31 @@ impl<R: io::Read> ReadHelper for R {
             Ok(None)
         }
     }
+}
 
-    fn read_remaining_u64_varint(&mut self, first: u8) -> io::Result<u64> {
-        if first & 0x80 == 0 {
-            return Ok(u64::from(first));
-        }
-
-        let mut result = u64::from(first & 0x7F);
-        let mut offset = 7;
-
-        loop {
-            let current = try!(self.read_u8());
-            result += u64::from(current & 0x7F) << offset;
-            if current & 0x80 == 0 {
-                return Ok(result);
-            }
-            offset += 7;
-            if offset == 63 {
-                let last = try!(self.read_u8());
-                if last == 0x01 {
-                    return Ok(result + (1 << offset));
-                } else {
-                    return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "varint exceeded 64 bits long"));
-                }
-            }
-        }
-    }
+fn other<E: ::std::error::Error + Send + Sync + 'static>(e: E) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, e)
 }
 
 impl<R: io::Read> ReadVarInt for R {
     fn read_u64_varint(&mut self) -> io::Result<u64> {
-        let first = try!(self.read_u8());
-        self.read_remaining_u64_varint(first)
+        let mut parser = Parser::new();
+        while !parser.done() {
+            parser.push(self.read_u8()?).map_err(other)?;
+        }
+        Ok(parser.result())
     }
 
     fn try_read_u64_varint(&mut self) -> io::Result<Option<u64>> {
-        if let Some(first) = try!(self.try_read_u8()) {
-            Ok(Some(try!(self.read_remaining_u64_varint(first))))
-        } else {
-            Ok(None)
+        let mut parser = Parser::new();
+        while !parser.done() {
+            if let Some(byte) = self.try_read_u8()? {
+                parser.push(byte).map_err(other)?;
+            } else {
+                return Ok(None);
+            }
         }
+        Ok(Some(parser.result()))
     }
 
     fn read_usize_varint(&mut self) -> io::Result<usize> {
